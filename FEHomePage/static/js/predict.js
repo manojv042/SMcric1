@@ -1,3 +1,13 @@
+function showAlert(message) {
+    const errorMessage = document.getElementById('error-message');
+    errorMessage.textContent = message;
+    errorMessage.style.display = 'block';
+
+    setTimeout(() => {
+        errorMessage.style.display = 'none';
+    }, 3000);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     fetch('/dropdown_data')
         .then(response => response.json())
@@ -32,20 +42,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 });
 
-function showAlert(message) {
-    const errorMessage = document.getElementById('error-message');
-    errorMessage.textContent = message;
-    errorMessage.style.display = 'block';
-
-    setTimeout(() => {
-        errorMessage.style.display = 'none';
-    }, 3000);
-}
-
 function updateTossOptions() {
     const team1 = document.getElementById('team1').value;
     const team2 = document.getElementById('team2').value;
-    const tossWinnerSelect = document.getElementById('toss-winner');
+    const tossWinnerSelect = document.getElementById('toss_winner');
     tossWinnerSelect.innerHTML = `<option value="" disabled selected>Select Toss Winner</option>`;
 
     if (team1 && team2) {
@@ -62,32 +62,16 @@ function updateTossOptions() {
     }
 }
 
-function updateMatchDetails() {
-    const team1 = document.getElementById('team1').value;
-    const team2 = document.getElementById('team2').value;
-
-    if (team1 && team2) {
-        fetch(`/match_score?team1=${team1}&team2=${team2}`)
-            .then(response => response.json())
-            .then(data => {
-                const detailsBox = document.getElementById('dataBox');
-                detailsBox.style.display = 'block';
-                document.getElementById('toss-winner-display').textContent = data.toss_winner;
-                document.getElementById('toss-decision-display').textContent = data.toss_decision;
-                document.getElementById('result-display').textContent = data.result;
-                document.getElementById('margin-display').textContent = data.result_margin;
-            })
-            .catch(error => console.error('Error fetching match details:', error));
-    }
-}
-
-function predict() {
+async function predict() {
     const team1 = document.getElementById('team1').value;
     const team2 = document.getElementById('team2').value;
     const city = document.getElementById('city').value;
-    const requiredRuns = document.getElementById('required-runs').value;
-    const requiredOvers = document.getElementById('required-overs').value;
-    const requiredWickets = document.getElementById('required-wickets').value;
+    const required_runs = document.getElementById('required_runs').value;
+    const remaining_overs = document.getElementById('remaining_overs').value;
+    const remaining_wickets = document.getElementById('remaining_wickets').value;
+    const toss_winner = document.getElementById('toss_winner').value;
+    const toss_decision = document.getElementById('toss_decision').value;
+    const target_runs = document.getElementById('target_runs').value;
 
     if (!team1 || !team2 || team1 === team2) {
         showAlert('Please select two different teams.');
@@ -99,18 +83,23 @@ function predict() {
         return;
     }
 
-    if (!requiredRuns || requiredRuns <= 0) {
-        showAlert('Please enter a valid number for required runs.');
+    //if (required_runs <= 0 || required_runs > target_runs) {
+        //showAlert('Please enter a valid number for required runs.');
+       // return;
+   // }
+
+    if (!remaining_overs || remaining_overs <= 0) {
+        showAlert('Please enter a valid number for remaining overs.');
         return;
     }
 
-    if (!requiredOvers || requiredOvers <= 0) {
-        showAlert('Please enter a valid number for required overs.');
+    if (!remaining_wickets || remaining_wickets < 0) {
+        showAlert('Please enter a valid number for remaining wickets.');
         return;
     }
 
-    if (!requiredWickets || requiredWickets < 0) {
-        showAlert('Please enter a valid number for required wickets.');
+    if (!target_runs || target_runs <= 0) {
+        showAlert('Please enter a valid number for target runs.');
         return;
     }
 
@@ -118,33 +107,40 @@ function predict() {
         team1: team1,
         team2: team2,
         city: city,
-        required_runs: requiredRuns,
-        required_overs: requiredOvers,
-        required_wickets: requiredWickets
+        required_runs: required_runs,
+        remaining_overs: remaining_overs,
+        remaining_wickets: remaining_wickets,
+        toss_winner: toss_winner,
+        toss_decision: toss_decision,
+        target_runs: target_runs
     };
 
-    fetch('/predict', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(predictionData)
-    })
-    .then(response => response.json())
-    .then(data => {
+    try {
+        const response = await fetch('/predict/result', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(predictionData)
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
         const result = data.team1_win_probability > 50
-            ? `${team1} has a higher chance of winning!`
-            : `${team2} has a higher chance of winning!`;
+            ? `${data.team1} has a higher chance of winning!`
+            : `${data.team2} has a higher chance of winning!`;
 
         const probability = data.team1_win_probability;
         displayPrediction(result, probability, team1, team2);
 
         scrollToProbabilitySection();
-    })
-    .catch(error => {
+    } catch (error) {
         console.error('Error during prediction:', error);
-        showAlert('Error making prediction. Please try again later.');
-    });
+        showAlert('An error occurred while making the prediction. Please try again.');
+    }
 }
 
 function displayPrediction(result, probability, team1Name, team2Name) {
@@ -154,7 +150,7 @@ function displayPrediction(result, probability, team1Name, team2Name) {
 
     winProbabilitySection.style.display = 'block';
 
-    const chartHTML = ` 
+    const chartHTML = `
         <div class="probability-bar-container">
             <div class="team-name left">${team1Name}</div>
             <div class="probability-bar-background">
