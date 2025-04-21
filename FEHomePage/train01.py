@@ -199,7 +199,7 @@ class IPLWinPredictor:
 
 def main():
     # Load your cleaned IPL dataset
-    df = pd.read_csv(r'C:\Users\manoj\SMcric\FEHomePage\output2.csv')
+    df = pd.read_csv(r'/Users/samuel/Downloads/Project/codenew15/CricketPrediction/FEHomePage/output2.csv')
     
     # Initialize and train the predictor
     predictor = IPLWinPredictor()
