@@ -62,6 +62,7 @@ class IPLWinPredictor:
         if len(known_values) == 0:
             return np.zeros(len(series))
         series = series.map(lambda x: known_values[0] if x not in known_values else x)
+        
         return encoder.transform(series)
         
     def calculate_team_stats(self, df):
