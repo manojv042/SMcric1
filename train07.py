@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
 import warnings
+from scipy.special import expit 
 warnings.filterwarnings('ignore')
 
 class IPLWinPredictor:
@@ -301,194 +302,131 @@ class IPLWinPredictor:
         plt.tight_layout()
         plt.show()
     
-    def _wicket_resources_factor(self, wickets_lost):
-        """ Returns the batting resources factor based on number of wickets lost,
-        roughly following the DLS method."""
-        dls_lookup = {
-        0: 1.00,
-        1: 0.95,
-        2: 0.90,
-        3: 0.80,
-        4: 0.70,
-        5: 0.55,
-        6: 0.40,
-        7: 0.25,
-        8: 0.12,
-        9: 0.05,
-        10: 0.00
-        }
-        return dls_lookup.get(wickets_lost, 0.0)
-    def get_dls_resource(self,overs_left, wickets_lost):
-        """
-    Estimate batting resources left using simplified DLS table.
-    Returns a float in range [0, 1] (as a fraction).
-    """
+    def get_dls_resource(self, overs_left, wickets_lost):
+        """Estimate batting resources left using simplified DLS table, capped for valid range."""
         overs = int(np.clip(round(overs_left), 0, 20))
         wickets = int(np.clip(wickets_lost, 0, 9))
         DLS_RESOURCE_TABLE = {
-    # overs_left: [resources for wickets_lost = 0, 1, ..., 9]
-    20: [100.0, 92.0, 83.8, 74.9, 65.0, 54.0, 41.7, 28.6, 15.0, 6.0],
-    19: [96.1, 88.5, 80.3, 71.4, 61.5, 50.6, 38.3, 25.4, 12.8, 5.2],
-    18: [92.3, 84.9, 76.8, 68.0, 58.0, 47.3, 35.0, 22.5, 11.0, 4.5],
-    17: [88.5, 81.3, 73.3, 64.5, 54.5, 44.1, 31.9, 19.9, 9.5, 3.8],
-    16: [84.7, 77.7, 69.8, 61.0, 51.0, 41.0, 29.0, 17.0, 8.0, 3.2],
-    15: [81.0, 74.1, 66.3, 57.5, 47.5, 37.8, 26.3, 15.0, 7.0, 2.7],
-    14: [77.2, 70.5, 62.8, 54.0, 44.0, 34.5, 23.7, 13.0, 6.0, 2.3],
-    13: [73.4, 66.9, 59.3, 50.5, 40.5, 31.2, 21.2, 11.0, 5.0, 1.9],
-    12: [69.6, 63.3, 55.8, 47.0, 37.0, 28.0, 18.7, 9.5, 4.2, 1.5],
-    11: [65.8, 59.7, 52.3, 43.5, 33.5, 24.8, 16.2, 8.0, 3.5, 1.2],
-    10: [62.0, 56.1, 48.8, 40.0, 30.0, 21.6, 13.7, 6.5, 2.8, 0.9],
-    9:  [58.2, 52.5, 45.3, 36.5, 26.5, 18.4, 11.2, 5.0, 2.2, 0.7],
-    8:  [54.4, 48.9, 41.8, 33.0, 23.0, 15.2, 8.7, 4.0, 1.7, 0.5],
-    7:  [50.6, 45.3, 38.3, 29.5, 19.5, 12.0, 6.2, 3.0, 1.2, 0.3],
-    6:  [46.8, 41.7, 34.8, 26.0, 16.0, 9.0, 4.2, 2.0, 0.9, 0.2],
-    5:  [43.0, 38.1, 31.3, 22.5, 12.5, 6.5, 2.8, 1.5, 0.6, 0.1],
-    4:  [39.2, 34.5, 27.8, 19.0, 9.5, 4.5, 1.7, 1.0, 0.4, 0.1],
-    3:  [35.4, 30.9, 24.3, 15.5, 7.0, 3.0, 1.0, 0.6, 0.3, 0.1],
-    2:  [31.6, 27.3, 20.8, 12.0, 5.0, 1.8, 0.7, 0.4, 0.2, 0.0],
-    1:  [27.8, 23.7, 17.3, 8.5, 3.0, 1.0, 0.4, 0.2, 0.1, 0.0],
-    0:  [0.0]*10  # No overs left, 0 resources
-}
-
+        20: [100.0, 92.0, 83.8, 74.9, 65.0, 54.0, 41.7, 28.6, 15.0, 6.0],
+        19: [96.1, 88.5, 80.3, 71.4, 61.5, 50.6, 38.3, 25.4, 12.8, 5.2],
+        18: [92.3, 84.9, 76.8, 68.0, 58.0, 47.3, 35.0, 22.5, 11.0, 4.5],
+        17: [88.5, 81.3, 73.3, 64.5, 54.5, 44.1, 31.9, 19.9, 9.5, 3.8],
+        16: [84.7, 77.7, 69.8, 61.0, 51.0, 41.0, 29.0, 17.0, 8.0, 3.2],
+        15: [81.0, 74.1, 66.3, 57.5, 47.5, 37.8, 26.3, 15.0, 7.0, 2.7],
+        14: [77.2, 70.5, 62.8, 54.0, 44.0, 34.5, 23.7, 13.0, 6.0, 2.3],
+        13: [73.4, 66.9, 59.3, 50.5, 40.5, 31.2, 21.2, 11.0, 5.0, 1.9],
+        12: [69.6, 63.3, 55.8, 47.0, 37.0, 28.0, 18.7, 9.5, 4.2, 1.5],
+        11: [65.8, 59.7, 52.3, 43.5, 33.5, 24.8, 16.2, 8.0, 3.5, 1.2],
+        10: [62.0, 56.1, 48.8, 40.0, 30.0, 21.6, 13.7, 6.5, 2.8, 0.9],
+        9:  [58.2, 52.5, 45.3, 36.5, 26.5, 18.4, 11.2, 5.0, 2.2, 0.7],
+        8:  [54.4, 48.9, 41.8, 33.0, 23.0, 15.2, 8.7, 4.0, 1.7, 0.5],
+        7:  [50.6, 45.3, 38.3, 29.5, 19.5, 12.0, 6.2, 3.0, 1.2, 0.3],
+        6:  [46.8, 41.7, 34.8, 26.0, 16.0, 9.0, 4.2, 2.0, 0.9, 0.2],
+        5:  [43.0, 38.1, 31.3, 22.5, 12.5, 6.5, 2.8, 1.5, 0.6, 0.1],
+        4:  [39.2, 34.5, 27.8, 19.0, 9.5, 4.5, 1.7, 1.0, 0.4, 0.1],
+        3:  [35.4, 30.9, 24.3, 15.5, 7.0, 3.0, 1.0, 0.6, 0.3, 0.1],
+        2:  [31.6, 27.3, 20.8, 12.0, 5.0, 1.8, 0.7, 0.4, 0.2, 0.0],
+        1:  [27.8, 23.7, 17.3, 8.5, 3.0, 1.0, 0.4, 0.2, 0.1, 0.0],
+        0:  [0.0]*10
+        }
         resource_percent = DLS_RESOURCE_TABLE.get(overs, [0.0]*10)[wickets]
         return resource_percent / 100.0
-    
-    def _calculate_pressure_factor(self, required_runs, remaining_overs, wickets_remaining):
-        """Calculate the pressure factor for the chasing team"""
-        # Calculate balls remaining (6 balls per over)
-        balls_remaining = remaining_overs * 6
-        
-        # Basic pressure calculation
-        if balls_remaining <= 0:
-            return 0  # No balls left means no chance
-            
-        rpb_needed = required_runs / balls_remaining
-        pressure = rpb_needed / (0.2 * wickets_remaining + 0.5)
-        pressure_factor = np.exp(-pressure)
-        
-        return np.clip(pressure_factor, 0.1, 1.0)
-    
+
+    def _calculate_pressure_factor(self, required_runs, balls_left, wickets_in_hand):
+        """Simple model: returns a pressure penalty for tight chases. Returns 1.0 for comfortable, <1.0 for pressure."""
+        # If required run rate < 8, wickets > 5, no pressure
+        if balls_left <= 0 or wickets_in_hand <= 0:
+            return 0  # match lost
+        req_rr = required_runs / (balls_left / 6)
+        if req_rr < 7.5 and wickets_in_hand > 5:
+            return 1.0
+        elif req_rr < 10 and wickets_in_hand > 3:
+            return 0.9
+        else:
+            return 0.5  # high pressure
+
     def predict_win_probability(self, match_info):
-        """Predict win probability for a match"""
+        """Predict win probability for a match: improved chase calculation based on live match situation."""
         try:
-            # Prepare base features
             match_data = pd.DataFrame([match_info])
             X_full = self.prepare_features(match_data, is_training=False)
-            
             if self.selector is None:
                 raise ValueError("Model has not been trained yet")
-                
             X = self.selector.transform(X_full)
-            
-            # Get base probabilities
             probabilities = self.model.predict_proba(X)[0]
             team1_base_prob, team2_base_prob = probabilities[1], probabilities[0]
             print(f"Base Probabilities: {match_info['team1']}={team1_base_prob:.3f}, {match_info['team2']}={team2_base_prob:.3f}")
-            self.plot_feature_importance()
-            
-            # If no match situation data, return base probabilities
-            if not all(k in match_info for k in ['required_runs', 'remaining_overs', 'wickets_lost']):
+            # If no match situation, return base
+            if not all(k in match_info for k in ['required_runs', 'remaining_overs', 'wickets_lost', 'target_runs', 'target_overs']):
                 return {
-                    'team1_win_probability': team1_base_prob,
-                    'team2_win_probability': team2_base_prob,
-                    'match_situation': None
+                'team1_win_probability': team1_base_prob,
+                'team2_win_probability': team2_base_prob,
+                'match_situation': None
                 }
-            
-            # Determine which team is batting first
-            batting_first = (((match_info.get('toss_winner') == match_info.get('team1')) & (match_info.get('toss_decision') == 'bat')) | 
-                              ((match_info.get('toss_winner') != match_info.get('team1')) & (match_info.get('toss_decision') == 'field')))
-                              
-            
+        # Determine chasing team
+            batting_first = (((match_info.get('toss_winner') == match_info.get('team1')) & (match_info.get('toss_decision') == 'bat')) |
+                         ((match_info.get('toss_winner') != match_info.get('team1')) & (match_info.get('toss_decision') == 'field')))
             chasing_team = match_info['team1'] if not batting_first else match_info['team2']
-            
-            # Extract match situation variables
+        # Inputs
             required_runs = match_info['required_runs']
-            remaining_overs = max(match_info['remaining_overs'], 0.1)  # Avoid division by zero
+            remaining_overs = max(match_info['remaining_overs'], 0.05)
+            balls_left = int(remaining_overs * 6)
             wickets_lost = match_info['wickets_lost']
-            wickets_remaining = 10 - wickets_lost
-            total_overs = match_info.get('target_overs', 20.0)  # Default to T20 if not specified
-            target_runs = match_info.get('target_runs', 0)
-            
-            # Calculate required run rate and compare with initial/target run rate
-            required_rr = required_runs / remaining_overs
-            initial_rr = target_runs / total_overs if target_runs > 0 else 0
-            
-            # Calculate resources remaining
+            wickets_in_hand = 10 - wickets_lost
+            target_runs = match_info['target_runs']
+            total_overs = match_info['target_overs']
             resources_remaining = self.get_dls_resource(remaining_overs, wickets_lost)
-            
-            # Calculate run rate difficulty
-            if initial_rr > 0:
-                rr_difficulty = required_rr / initial_rr
+        # --- Improved chase win probability ---
+        # If runs to get < balls left and wickets > 5, win prob is very high
+            if (required_runs <= balls_left) and (wickets_in_hand > 5) and (required_runs / balls_left < 1.2):
+                chase_win_prob = 0.99
+        # If wickets < 3 and RR > 10, win prob low
+            elif wickets_in_hand < 3 and required_runs / balls_left > 1.5:
+                chase_win_prob = 0.10
             else:
-                reference_rr = 7.5 if total_overs <= 20 else 5.5
-                rr_difficulty = required_rr / reference_rr
-                
-            rr_difficulty = np.clip(rr_difficulty, 0.5, 3.0)
-            
-            # Calculate chase difficulty
-            chase_difficulty = rr_difficulty / resources_remaining
+            # Logistic model: base on runs/ball and wickets
+                rr_ratio = (required_runs / balls_left) / (target_runs / (total_overs*6))
+            # More wickets, more chance; more rr_ratio, less chance
+                score = 3.0 - 8.0 * rr_ratio + 0.25 * wickets_in_hand + 7 * resources_remaining
+                chase_win_prob = expit(score)
+            # pressure penalty
+                chase_win_prob *= self._calculate_pressure_factor(required_runs, balls_left, wickets_in_hand)
+        # Blend pre-match and live
             match_progress = 1 - (remaining_overs / total_overs)
-            
-            # Beta distribution parameters for win probability
-            alpha = 1 + (10 * match_progress)
-            beta_param = 1 + (5 * chase_difficulty)
-            
-            # Calculate chase win probability
-            chase_win_prob = 1 - beta.cdf(chase_difficulty / 5, alpha, beta_param)
-            
-            # Apply pressure factors for end-game scenarios
-            if remaining_overs < 5:
-                pressure_factor = self._calculate_pressure_factor(
-                    required_runs, 
-                    remaining_overs, 
-                    wickets_remaining
-                )
-                chase_win_prob *= pressure_factor
-            
-            # Weight between pre-match and in-match probabilities
-            pre_match_weight = max(0.1, 1 - match_progress)
-            situation_weight = 1 - pre_match_weight
-            
-            # Blend probabilities based on which team is chasing
+            pre_match_weight = max(0.05, 1 - match_progress)
+            live_weight = 1 - pre_match_weight
             if chasing_team == match_info['team1']:
-                # Team 1 is chasing
-                team1_win_prob = (pre_match_weight * team1_base_prob) + (situation_weight * chase_win_prob)
+                team1_win_prob = pre_match_weight * team1_base_prob + live_weight * chase_win_prob
                 team2_win_prob = 1 - team1_win_prob
             else:
-                # Team 2 is chasing
-                team2_win_prob = (pre_match_weight * team2_base_prob) + (situation_weight * chase_win_prob)
+                team2_win_prob = pre_match_weight * team2_base_prob + live_weight * chase_win_prob
                 team1_win_prob = 1 - team2_win_prob
-            
             return {
-                'team1_win_probability': team1_win_prob,
-                'team2_win_probability': team2_win_prob,
-                'match_situation': {
-                    'required_rr': required_rr,
-                    'resources_remaining': resources_remaining,
-                    'chase_difficulty': chase_difficulty,
-                    'pre_match_weight': pre_match_weight,
-                    'chasing_team': chasing_team
+            'team1_win_probability': team1_win_prob,
+            'team2_win_probability': team2_win_prob,
+            'match_situation': {
+                'required_rr': required_runs / (remaining_overs if remaining_overs else 1),
+                'resources_remaining': resources_remaining,
+                'chase_win_prob': chase_win_prob,
+                'pre_match_weight': pre_match_weight,
+                'chasing_team': chasing_team
                 }
             }
-            
         except Exception as e:
             print(f"Error in predict_win_probability: {str(e)}")
             print("Input match_info:")
             print(match_info)
-            
-            # Return base probabilities in case of error
             try:
                 return {
-                    'team1_win_probability': probabilities[1],
-                    'team2_win_probability': probabilities[0],
-                    'match_situation': None
+                'team1_win_probability': probabilities[1],
+                'team2_win_probability': probabilities[0],
+                'match_situation': None
                 }
             except:
-                # If everything fails, return 50-50
                 return {
-                    'team1_win_probability': 0.5,
-                    'team2_win_probability': 0.5,
-                    'match_situation': None
+                'team1_win_probability': 0.5,
+                'team2_win_probability': 0.5,
+                'match_situation': None
                 }
     
     def save_model(self, filepath):
@@ -542,7 +480,7 @@ def main():
         'city': 'Bengaluru',
         'target_runs': 214,
         'target_overs': 20,
-        'required_runs': 10,
+        'required_runs': 14,
         'remaining_overs': 2,
         'wickets_lost': 2,
         'toss_winner': 'Chennai Super Kings',
