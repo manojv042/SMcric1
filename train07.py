@@ -5,10 +5,10 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.ensemble import RandomForestClassifier
-import xgboost as xgb
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel
 import matplotlib.pyplot as plt
+import seaborn as sns
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
@@ -24,10 +24,10 @@ class IPLWinPredictor:
 
         # Use only RandomForestClassifier with the best parameters
         self.model = RandomForestClassifier(
-            n_estimators=300,
-            max_depth=10,
+            n_estimators=100,
+            max_depth=8,
             min_samples_split=5,
-            min_samples_leaf=2,
+            min_samples_leaf=1,
             random_state=42
         )
         self.known_teams = None
@@ -35,6 +35,7 @@ class IPLWinPredictor:
         self.known_toss_decisions = None
         self.team_stats = {}
         self.venue_stats = {}
+        self.h2h_stats = {}  # Head-to-head stats
         
     def fit_encoders(self, df):
         """Fit the label encoders on the full dataset"""
@@ -79,20 +80,34 @@ class IPLWinPredictor:
                               (df['team2'] == team))]
             batting_first_wins = batting_first[batting_first['winner'] == team]
             batting_first_win_rate = len(batting_first_wins) / len(batting_first) if len(batting_first) > 0 else 0.5
-            
-            # Recent form (last 5 matches)
-            recent_matches = df[(df['team1'] == team) | (df['team2'] == team)].tail(5)
+
+            # Recent form (last 10 matches)
+            recent_matches = df[(df['team1'] == team) | (df['team2'] == team)].tail(10)
             recent_wins = recent_matches[recent_matches['winner'] == team]
             recent_form = len(recent_wins) / len(recent_matches) if len(recent_matches) > 0 else 0.5
             
-            # Head-to-head against common opponents
             self.team_stats[team] = {
                 'win_rate': win_rate,
                 'toss_win_advantage': toss_win_advantage,
                 'batting_first_win_rate': batting_first_win_rate,
                 'recent_form': recent_form
             }
-    
+
+    def calculate_h2h_stats(self, df):
+        """Calculate head-to-head win rate for each team pair"""
+        teams = set(df['team1'].unique()) | set(df['team2'].unique())
+        for team_a in teams:
+            for team_b in teams:
+                if team_a == team_b:
+                    continue
+                matches = df[((df['team1'] == team_a) & (df['team2'] == team_b)) | ((df['team1'] == team_b) & (df['team2'] == team_a))]
+                if len(matches) == 0:
+                    win_rate_a = 0.5  # Neutral if no matches
+                else:
+                    wins_a = matches[matches['winner'] == team_a]
+                    win_rate_a = len(wins_a) / len(matches)
+                self.h2h_stats[(team_a, team_b)] = win_rate_a
+
     def calculate_city_stats(self, df):
         if 'city' not in df.columns:
             return
@@ -117,12 +132,13 @@ class IPLWinPredictor:
                 'batting_first_win_rate': batting_first_win_rate,
                 'avg_first_innings_score': avg_first_innings_score
             }
-    
+
     def prepare_features(self, df, is_training=True):
-        """Prepare enhanced features for the model"""
+        """Prepare enhanced features for the model with improved relative stats and reduced redundancy"""
         if is_training:
             self.fit_encoders(df)
             self.calculate_team_stats(df)
+            self.calculate_h2h_stats(df)
             self.calculate_city_stats(df)
         
         df_encoded = df.copy()
@@ -137,13 +153,7 @@ class IPLWinPredictor:
                 df_encoded['venue_encoded'] = self.encode_with_unknown(df['city'], self.le_city, self.known_cities)
             
             # Toss-related features
-            df_encoded['is_toss_winner_team1'] = (df['toss_winner'] == df['team1']).astype(int)
-            df_encoded['is_batting_first'] = (df['toss_decision'] == 'bat').astype(int)
-            df_encoded['team1_batting_first'] = (
-                ((df['toss_winner'] == df['team1']) & (df['toss_decision'] == 'bat')) |
-                ((df['toss_winner'] == df['team2']) & (df['toss_decision'] == 'field'))
-            ).astype(int)
-            df_encoded['team2_batting_first'] = 1 - df_encoded['team1_batting_first']
+            # Removed: is_toss_winner_team1, is_batting_first, team1_batting_first, team2_batting_first
             
             # Team statistics features
             team_stats_columns = [
@@ -163,10 +173,13 @@ class IPLWinPredictor:
                 # Team2 stats
                 df_encoded[f'team2_{stat}'] = df['team2'].map(
                     lambda x: self.team_stats.get(x, {}).get(stat, default_val))
-                
-                # Relative advantage
-                df_encoded[f'relative_{stat}'] = df_encoded[f'team1_{stat}'] - df_encoded[f'team2_{stat}']
             
+            # Head-to-head relative win rate
+            def get_h2h(t1, t2):
+                return self.h2h_stats.get((t1, t2), 0.5)
+            df_encoded['relative_h2h_winrate'] = [get_h2h(row['team1'], row['team2']) for idx, row in df_encoded.iterrows()]
+            df_encoded['relative_h2h_winrate_copy'] = df_encoded['relative_h2h_winrate'].copy()  # or 3, depending on how much you want to boost it
+
             # Venue statistics features
             if 'city' in df.columns:
                 venue_stats_columns = ['batting_first_win_rate', 'avg_first_innings_score']
@@ -177,11 +190,9 @@ class IPLWinPredictor:
                     df_encoded[f'venue_{stat}'] = df['city'].map(
                         lambda x: self.venue_stats.get(x, {}).get(stat, default_val))
                 
-                # Interaction between venue and team stats
-                df_encoded['team1_venue_advantage'] = df_encoded['team1_batting_first'] * df_encoded['venue_batting_first_win_rate'] + \
-                                                    (1 - df_encoded['team1_batting_first']) * (1 - df_encoded['venue_batting_first_win_rate'])
-                df_encoded['team2_venue_advantage'] = df_encoded['team2_batting_first'] * df_encoded['venue_batting_first_win_rate'] + \
-                                                    (1 - df_encoded['team2_batting_first']) * (1 - df_encoded['venue_batting_first_win_rate'])
+                # Example: team1_venue_advantage (now computes only win rate difference between the two teams at venue if enough data, else 0)
+                # You may customize further if you want to bring in venue+team stats
+                # (Removed team1_batting_first etc)
             
             # Match situation features
             if 'target_runs' in df.columns:
@@ -190,7 +201,9 @@ class IPLWinPredictor:
             
             if is_training:
                 df_encoded['target'] = (df['team1'] == df['winner']).astype(int)
-            
+
+            df_encoded.to_csv('team_stats.csv', index=False)
+
             # Collect all feature columns
             features = [col for col in df_encoded.columns 
                    if col not in ['match_id', 'city', 'player_of_match', 'venue', 
@@ -200,8 +213,8 @@ class IPLWinPredictor:
                                 'target_runs', 'target_overs'] and 
                    col in df_encoded.columns]
             
-            X = df_encoded[features]
-            
+            X = df_encoded[features]# Filter out low importance features
+
             if is_training:
                 self.scaler.fit(X)
             X_scaled = self.scaler.transform(X)
@@ -256,7 +269,6 @@ class IPLWinPredictor:
             print(report)
             print("\nConfusion matrix:")
             print(conf_matrix)
-            
             return {
                 'accuracy': accuracy,
                 'cv_scores': cv_scores,
@@ -290,10 +302,56 @@ class IPLWinPredictor:
         plt.show()
     
     def _wicket_resources_factor(self, wickets_lost):
-        """Calculate the resource factor based on wickets lost"""
-        if wickets_lost >= 10:
-            return 0.01  # Almost no resources left with all wickets gone
-        return np.exp(-0.4 * wickets_lost)
+        """ Returns the batting resources factor based on number of wickets lost,
+        roughly following the DLS method."""
+        dls_lookup = {
+        0: 1.00,
+        1: 0.95,
+        2: 0.90,
+        3: 0.80,
+        4: 0.70,
+        5: 0.55,
+        6: 0.40,
+        7: 0.25,
+        8: 0.12,
+        9: 0.05,
+        10: 0.00
+        }
+        return dls_lookup.get(wickets_lost, 0.0)
+    def get_dls_resource(self,overs_left, wickets_lost):
+        """
+    Estimate batting resources left using simplified DLS table.
+    Returns a float in range [0, 1] (as a fraction).
+    """
+        overs = int(np.clip(round(overs_left), 0, 20))
+        wickets = int(np.clip(wickets_lost, 0, 9))
+        DLS_RESOURCE_TABLE = {
+    # overs_left: [resources for wickets_lost = 0, 1, ..., 9]
+    20: [100.0, 92.0, 83.8, 74.9, 65.0, 54.0, 41.7, 28.6, 15.0, 6.0],
+    19: [96.1, 88.5, 80.3, 71.4, 61.5, 50.6, 38.3, 25.4, 12.8, 5.2],
+    18: [92.3, 84.9, 76.8, 68.0, 58.0, 47.3, 35.0, 22.5, 11.0, 4.5],
+    17: [88.5, 81.3, 73.3, 64.5, 54.5, 44.1, 31.9, 19.9, 9.5, 3.8],
+    16: [84.7, 77.7, 69.8, 61.0, 51.0, 41.0, 29.0, 17.0, 8.0, 3.2],
+    15: [81.0, 74.1, 66.3, 57.5, 47.5, 37.8, 26.3, 15.0, 7.0, 2.7],
+    14: [77.2, 70.5, 62.8, 54.0, 44.0, 34.5, 23.7, 13.0, 6.0, 2.3],
+    13: [73.4, 66.9, 59.3, 50.5, 40.5, 31.2, 21.2, 11.0, 5.0, 1.9],
+    12: [69.6, 63.3, 55.8, 47.0, 37.0, 28.0, 18.7, 9.5, 4.2, 1.5],
+    11: [65.8, 59.7, 52.3, 43.5, 33.5, 24.8, 16.2, 8.0, 3.5, 1.2],
+    10: [62.0, 56.1, 48.8, 40.0, 30.0, 21.6, 13.7, 6.5, 2.8, 0.9],
+    9:  [58.2, 52.5, 45.3, 36.5, 26.5, 18.4, 11.2, 5.0, 2.2, 0.7],
+    8:  [54.4, 48.9, 41.8, 33.0, 23.0, 15.2, 8.7, 4.0, 1.7, 0.5],
+    7:  [50.6, 45.3, 38.3, 29.5, 19.5, 12.0, 6.2, 3.0, 1.2, 0.3],
+    6:  [46.8, 41.7, 34.8, 26.0, 16.0, 9.0, 4.2, 2.0, 0.9, 0.2],
+    5:  [43.0, 38.1, 31.3, 22.5, 12.5, 6.5, 2.8, 1.5, 0.6, 0.1],
+    4:  [39.2, 34.5, 27.8, 19.0, 9.5, 4.5, 1.7, 1.0, 0.4, 0.1],
+    3:  [35.4, 30.9, 24.3, 15.5, 7.0, 3.0, 1.0, 0.6, 0.3, 0.1],
+    2:  [31.6, 27.3, 20.8, 12.0, 5.0, 1.8, 0.7, 0.4, 0.2, 0.0],
+    1:  [27.8, 23.7, 17.3, 8.5, 3.0, 1.0, 0.4, 0.2, 0.1, 0.0],
+    0:  [0.0]*10  # No overs left, 0 resources
+}
+
+        resource_percent = DLS_RESOURCE_TABLE.get(overs, [0.0]*10)[wickets]
+        return resource_percent / 100.0
     
     def _calculate_pressure_factor(self, required_runs, remaining_overs, wickets_remaining):
         """Calculate the pressure factor for the chasing team"""
@@ -325,7 +383,8 @@ class IPLWinPredictor:
             # Get base probabilities
             probabilities = self.model.predict_proba(X)[0]
             team1_base_prob, team2_base_prob = probabilities[1], probabilities[0]
-            print("Base Probabilities:", probabilities)
+            print(f"Base Probabilities: {match_info['team1']}={team1_base_prob:.3f}, {match_info['team2']}={team2_base_prob:.3f}")
+            self.plot_feature_importance()
             
             # If no match situation data, return base probabilities
             if not all(k in match_info for k in ['required_runs', 'remaining_overs', 'wickets_lost']):
@@ -355,9 +414,7 @@ class IPLWinPredictor:
             initial_rr = target_runs / total_overs if target_runs > 0 else 0
             
             # Calculate resources remaining
-            overs_remaining_pct = remaining_overs / total_overs
-            wickets_factor = self._wicket_resources_factor(wickets_lost)
-            resources_remaining = overs_remaining_pct * wickets_factor
+            resources_remaining = self.get_dls_resource(remaining_overs, wickets_lost)
             
             # Calculate run rate difficulty
             if initial_rr > 0:
@@ -456,7 +513,7 @@ class IPLWinPredictor:
 def main():
     # Load your cleaned IPL dataset
     try:
-        df = pd.read_csv('output2.csv')
+        df = pd.read_csv('output2.csv',skiprows=range(1,858))  # Adjust as needed
         print("Data loaded successfully. Shape:", df.shape)
     except Exception as e:
         print(f"Error loading data: {str(e)}")
@@ -480,13 +537,13 @@ def main():
     
     # Example prediction
     match_info = {
-        'team2': 'Chennai Super Kings',
-        'team1': 'Royal Challengers Bengaluru',
+        'team1': 'Chennai Super Kings',
+        'team2': 'Royal Challengers Bengaluru',
         'city': 'Bengaluru',
         'target_runs': 214,
         'target_overs': 20,
-        'required_runs': 87,
-        'remaining_overs': 8,
+        'required_runs': 10,
+        'remaining_overs': 2,
         'wickets_lost': 2,
         'toss_winner': 'Chennai Super Kings',
         'toss_decision': 'field'
