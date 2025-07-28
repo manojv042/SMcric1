@@ -14,34 +14,22 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class IPLWinPredictor:
-    def __init__(self, model_type='xgboost'):
+    def __init__(self):
         self.le_team = LabelEncoder()
         self.le_toss_decision = LabelEncoder()
         self.le_city = LabelEncoder() 
         self.scaler = StandardScaler()
         self.selector = None
-        self.model_type = model_type
         self.feature_importances_ = None
-        
-        if model_type == 'xgboost':
-            self.model = xgb.XGBClassifier(
-                n_estimators=200,
-                learning_rate=0.1,
-                max_depth=6,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                objective='binary:logistic',
-                random_state=42
-            )
-        else:
-            self.model = RandomForestClassifier(
-                n_estimators=200,
-                max_depth=10,
-                min_samples_split=5,
-                min_samples_leaf=2,
-                random_state=42
-            )
-            
+
+        # Use only RandomForestClassifier with the best parameters
+        self.model = RandomForestClassifier(
+            n_estimators=300,
+            max_depth=10,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42
+        )
         self.known_teams = None
         self.known_cities = None
         self.known_toss_decisions = None
@@ -87,7 +75,8 @@ class IPLWinPredictor:
             
             # Batting first performance
             batting_first = df[((df['toss_winner'] == team) & (df['toss_decision'] == 'bat')) | 
-                              ((df['toss_winner'] != team) & (df['toss_decision'] == 'field'))]
+                              ((df['toss_winner'] != team) & (df['toss_decision'] == 'field')) & ((df['team1'] == team) |
+                              (df['team2'] == team))]
             batting_first_wins = batting_first[batting_first['winner'] == team]
             batting_first_win_rate = len(batting_first_wins) / len(batting_first) if len(batting_first) > 0 else 0.5
             
@@ -103,6 +92,7 @@ class IPLWinPredictor:
                 'batting_first_win_rate': batting_first_win_rate,
                 'recent_form': recent_form
             }
+        print("Team statistics calculated successfully. Total teams:", (self.team_stats))
     
     def calculate_city_stats(self, df):
         if 'city' not in df.columns:
@@ -227,43 +217,17 @@ class IPLWinPredictor:
             print(df.head())
             raise
     
-    def tune_model(self, X_train, y_train):
-        """Tune hyperparameters using GridSearchCV"""
-        print(f"\nTuning {self.model_type} hyperparameters...")
-        
-        if isinstance(self.model, xgb.XGBClassifier):
-            param_grid = {
-                'n_estimators': [100, 200, 300],
-                'max_depth': [3, 5, 7],
-                'learning_rate': [0.01, 0.1, 0.2],
-                'subsample': [0.7, 0.8, 0.9],
-                'colsample_bytree': [0.7, 0.8, 0.9]
-            }
-        else:
-            param_grid = {
-                'n_estimators': [100, 200, 300],
-                'max_depth': [5, 10, 15],
-                'min_samples_split': [2, 5, 10],
-                'min_samples_leaf': [1, 2, 4]
-            }
-        
-        grid_search = GridSearchCV(
-            self.model, param_grid, cv=5, scoring='accuracy', n_jobs=-1, verbose=1
-        )
-        grid_search.fit(X_train, y_train)
-        
-        print(f"Best parameters: {grid_search.best_params_}")
-        self.model = grid_search.best_estimator_
-        return grid_search.best_params_
-    
-    def train(self, df, tune_hyperparams=False):
+    def train(self, df):
         """Train the model with enhanced features"""
         try:
             X, y = self.prepare_features(df, is_training=True)
             
             # Feature selection
             selector = SelectFromModel(
-                xgb.XGBClassifier(n_estimators=100, random_state=42), 
+                RandomForestClassifier(
+                    n_estimators=100, random_state=42, max_depth=10, 
+                    min_samples_split=5, min_samples_leaf=2
+                ), 
                 threshold='median'
             )
             selector.fit(X, y)
@@ -274,11 +238,6 @@ class IPLWinPredictor:
             X_train, X_test, y_train, y_test = train_test_split(
                 X_selected, y, test_size=0.2, random_state=42, stratify=y
             )
-            
-            # Tune hyperparameters if requested
-            best_params = None
-            if tune_hyperparams:
-                best_params = self.tune_model(X_train, y_train)
             
             # Train the model
             self.model.fit(X_train, y_train)
@@ -299,32 +258,11 @@ class IPLWinPredictor:
             print("\nConfusion matrix:")
             print(conf_matrix)
             
-            """# Get feature importance
-            
-            all_features = [col for col in df.columns 
-                       if col not in ['match_id', 'city', 'player_of_match', 'venue', 
-                                    'team1', 'team2', 'toss_winner', 'toss_decision', 
-                                    'winner', 'result', 'remaining_overs', 'required_runs',
-                                    'wickets_lost', 'result_margin', 
-                                    'target_runs', 'target_overs']]
-            selected_features = [f for f in all_features if f in df.columns and f not in ['target']]
-            feature_mask = selector.get_support()
-            selected_features = np.array(selected_features)[feature_mask]
-            if hasattr(self.model, 'feature_importances_'):
-                importances = self.model.feature_importances_
-                self.feature_importances_ = dict(zip(selected_features, importances))
-                
-                
-                
-                # Plot feature importance
-                self.plot_feature_importance()"""
-            
             return {
                 'accuracy': accuracy,
                 'cv_scores': cv_scores,
                 'report': report,
-                'conf_matrix': conf_matrix,
-                'best_params': best_params
+                'conf_matrix': conf_matrix
             }
             
         except Exception as e:
@@ -516,44 +454,18 @@ class IPLWinPredictor:
             print(f"Error loading model: {str(e)}")
             return None
 
-def auto_select_model(df):
-    """Automatically select the best model between XGBoost and Random Forest"""
-    models = ['xgboost', 'random_forest']
-    best_predictor = None
-    best_score = 0
-    
-    for model_type in models:
-        print(f"\nEvaluating {model_type} model...")
-        predictor = IPLWinPredictor(model_type=model_type)
-        results = predictor.train(df, tune_hyperparams=False)  # Don't tune during auto-selection
-        
-        if results['accuracy'] > best_score:
-            best_score = results['accuracy']
-            best_predictor = predictor
-    
-    if best_predictor:
-        print(f"\nAuto-selected model: {best_predictor.model.__class__.__name__} with accuracy {best_score:.4f}")
-    return best_predictor
-
 def main():
     # Load your cleaned IPL dataset
     try:
-        df = pd.read_csv('output2.csv',skiprows=range(1, 887))
+        df = pd.read_csv('output2.csv')
         print("Data loaded successfully. Shape:", df.shape)
     except Exception as e:
         print(f"Error loading data: {str(e)}")
         return
-    
-    # Auto-select the best model
-    predictor = auto_select_model(df)
-    
-    if predictor is None:
-        print("Failed to create a valid model")
-        return
-    
-    # Now train the best model with hyperparameter tuning
-    print("\nTraining selected model with hyperparameter tuning...")
-    results = predictor.train(df, tune_hyperparams=True)
+
+    # Directly use RandomForestClassifier
+    predictor = IPLWinPredictor()
+    results = predictor.train(df)
     
     # Print results
     print(f"\nFinal Model Accuracy: {results['accuracy']:.4f}")
@@ -587,7 +499,6 @@ def main():
         print(f"{match_info['team1']}: {probabilities['team1_win_probability']:.2%}")
         print(f"{match_info['team2']}: {probabilities['team2_win_probability']:.2%}")
         
-        # Print match situation analysis if available
         if probabilities['match_situation']:
             print("\nMatch Situation Analysis:")
             sit = probabilities['match_situation']
@@ -598,8 +509,7 @@ def main():
             print(f"Pre-match Weight: {sit['pre_match_weight']:.2f}")
     except Exception as e:
         print(f"Error in prediction: {str(e)}")
-    
-    # Save the trained model
+
     predictor.save_model('ipl_win_predictor.pkl')
 
 if __name__ == "__main__":
